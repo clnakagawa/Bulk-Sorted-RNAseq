@@ -1,0 +1,128 @@
+---
+title: "bulkAnalysis"
+output: html_document
+---
+```{r setup, include = F}
+knitr::opts_chunk$set(message = F, warning = F)
+```
+
+```{r}
+library(DESeq2)
+```
+
+```{r}
+# load in counts
+cts <- read.table('data/counts.txt', fill=T)
+# get rows where columns are shifted
+toFix <- cts[[ncol(cts)]] == ""
+# unshift columns
+cts[toFix, 2:ncol(cts)] <- cts[toFix, 1:(ncol(cts)-1)]
+cts[toFix, 1] <- ""
+
+# fix row/column naming
+colnames(cts) <- cts[1,]
+cts <- cts[2:nrow(cts),]
+cts <- cts[!duplicated(cts$gene_id),]
+
+# store gene to id info for later
+id2gene <- cts[,c(1,2)]
+id2gene[is.na(id2gene$symbol),] <- ""
+blanks <- id2gene$symbol == ""
+id2gene[blanks,]$symbol <- id2gene[blanks,]$gene_id
+
+# set rownames to id and remove first 2 cols
+rownames(cts) <- cts$gene_id
+cts <- cts[,3:ncol(cts)]
+ids <- rownames(cts)
+cts <- sapply(cts, as.numeric)
+rownames(cts) <- ids
+```
+
+```{r}
+# helper to get symbols
+getSym <- function(ids) {
+  return(unlist(lapply(ids, function(x) id2gene[id2gene$gene_id==x,]$symbol)))
+}
+
+```
+
+```{r}
+# make colData object
+coldata <- data.frame(condition = c('basal_pALI','basal_pALI','basal_pALI',
+                                    'bulk_pALI','bulk_pALI','bulk_pALI',
+                                    'secretory_pALI','secretory_pALI','secretory_pALI',
+                                    'ciliated_pALI','ciliated_pALI','ciliated_pALI',
+                                    'basal_vALI','basal_vALI','basal_vALI',
+                                    'secretory_vALI','secretory_vALI','secretory_vALI',
+                                    'ciliated_vALI','ciliated_vALI','ciliated_vALI'),
+                      row.names = colnames(cts))
+```
+
+```{r}
+# make DESeq object
+dds <- DESeqDataSetFromMatrix(countData = cts,
+                              colData = coldata,
+                              design = ~ condition)
+dds
+```
+
+```{r}
+# pre-filtering
+smallestGroupSize <- 3
+keep <- rowSums(counts(dds) >= 10) >= smallestGroupSize
+dds <- dds[keep,]
+```
+
+```{r}
+# check PCA
+vsd <- vst(dds, blind=F)
+plotPCA(vsd)
+```
+
+```{r}
+# run DESeq
+des <- DESeq(dds)
+
+# get results for pALI comparisons by cell type
+res.Sec.Bsl <- lfcShrink(des, coef="condition_secretory_pALI_vs_basal_pALI", type="apeglm")
+res.Cil.Bsl <- lfcShrink(des, coef="condition_ciliated_pALI_vs_basal_pALI", type="apeglm")
+```
+
+```{r}
+# relevel to get secretory vs ciliated
+dds$condition <- relevel(dds$condition, ref = "ciliated_pALI")
+des <- DESeq(dds)
+
+# get results for secretory vs ciliated
+res.Sec.Cil <- lfcShrink(des, coef="condition_secretory_pALI_vs_ciliated_pALI", type="apeglm")
+```
+
+```{r}
+gene <- id2gene[id2gene$symbol=='KLF5',]$gene_id
+res.Sec.Cil[gene,]
+res.Sec.Bsl[gene,]
+res.Cil.Bsl[gene,]
+
+```
+```{r}
+# merge dataframes
+res.Sec.Bsl$Type <- 'secretory'
+res.Cil.Bsl$Type <- 'ciliated'
+allDE <- rbind(res.Sec.Bsl, res.Cil.Bsl)
+x <- rownames(allDE)
+allDE$gene_symbol <- id2gene$symbol[match(x, id2gene$gene_id)]
+```
+
+```{r}
+library(ggplot2)
+
+plotGenes <- c("KLF5", "STAT2", "CEBPB", "TEAD4", "IRF1", "STAT1", "FOXA1",
+               "IRF9")
+
+plotDE <- allDE[allDE$gene_symbol %in% plotGenes,]
+
+ggplot(plotDE, aes(fill=Type, y=log2FoldChange, x=gene_symbol)) +
+  geom_bar(position="dodge", stat="identity")
+
+print(plotDE)
+```
