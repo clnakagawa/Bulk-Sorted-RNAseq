@@ -85,18 +85,18 @@ ddsV <- ddsV[keepV,]
 ```{r}
 # check PCA
 vsdP <- vst(ddsP, blind=F)
-plotPCA(vsdP)
+plotPCA(vsdP) + ggtitle('PCA for pALI samples')
 
 vsdV <- vst(ddsV, blind=F)
-plotPCA(vsdV)
+plotPCA(vsdV) + ggtitle('PCA for vALI samples')
 ```
 ```{r}
 # check sd
 mspP <- meanSdPlot(assay(vsdP), plot = F)
 mspV <- meanSdPlot(assay(vsdV), plot = F)
 
-mspP$gg + scale_y_continuous(limits = c(0, 2.5))
-mspV$gg + scale_y_continuous(limits = c(0, 2.5))
+mspP$gg + scale_y_continuous(limits = c(0, 2.5)) + ggtitle('SD by Gene (pALI)')
+mspV$gg + scale_y_continuous(limits = c(0, 2.5)) + ggtitle('SD by Gene (vALI)')
 ```
 
 ```{r}
@@ -111,7 +111,8 @@ colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
 p1 <- pheatmap(sdmP,
          clustering_distance_rows=distP,
          clustering_distance_cols=distP,
-         col=colors)
+         col=colors,
+         main='Sample-sample Distances (pALI)')
 
 sdmV <- as.matrix(distV)
 rownames(sdmV) <- vsdV$condition
@@ -120,7 +121,8 @@ colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
 p2 <- pheatmap(sdmV,
          clustering_distance_rows=distV,
          clustering_distance_cols=distV,
-         col=colors)
+         col=colors,
+         main='Sample-sample Distances (vALI)')
 ```
 
 ```{r include=F}
@@ -162,6 +164,7 @@ plotdatP <- rbind(resP.Sec, resP.Cil)
 
 ggplot(plotdatP[plotdatP$gene %in% pltGenes,], aes(fill=Type, y=log2FoldChange, x=gene)) +
   geom_bar(position="dodge", stat="identity") +
+  ggtitle('TFs of Interest DE by Cell Type  in pALI') +
   scale_y_continuous(limits=c(-3,3))
 
 # vertex ALI
@@ -171,6 +174,7 @@ plotdatV <- rbind(resV.Sec, resV.Cil)
   
 ggplot(plotdatV[plotdatV$gene %in% pltGenes,], aes(fill=Type, y=log2FoldChange, x=gene)) +
   geom_bar(position="dodge", stat="identity") +
+  ggtitle('TFs of Interest DE by Cell Type in vALI') +
   scale_y_continuous(limits=c(-3,3))
 ```
 ```{r}
@@ -179,10 +183,12 @@ checkGenes <- c('CFTR', 'SCGB1A1', 'KRT5', 'FOXJ1')
 
 ggplot(plotdatP[plotdatP$gene %in% checkGenes,], aes(fill=Type, y=log2FoldChange, x=gene)) +
   geom_bar(position="dodge", stat="identity") +
+  ggtitle('Marker Genes DE by Cell Type in pALI') +
   scale_y_continuous(limits=c(-6,6))
 
 ggplot(plotdatV[plotdatV$gene %in% checkGenes,], aes(fill=Type, y=log2FoldChange, x=gene)) +
   geom_bar(position="dodge", stat="identity") +
+  ggtitle('Marker Genes DE by Cell Type in vALI') +
   scale_y_continuous(limits=c(-6,6))
 ```
 
@@ -209,11 +215,11 @@ keep <- rowSums(counts(dds) >= 10) >= smallestGroupSize
 dds <- dds[keep,]
 dds
 ```
+
 ```{r}
 # check PCA
 vsd <- vst(dds, blind=F)
-plotPCA(vsd)
-
+plotPCA(vsd) + ggtitle('PCA (all samples)')
 ```
 ```{r}
 # sample-sample dists
@@ -225,8 +231,29 @@ colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
 pheatmap(sdm,
          clustering_distance_rows=dist,
          clustering_distance_cols=dist,
-         col=colors)
+         col=colors,
+         main="Sample-sample Distances")
 
 ```
+```{r include=F}
+dds$condition <- relevel(dds$condition, ref = "basal_pALI")
+des <- DESeq(dds)
+```
 
+```{r include=F}
+# look at basal v basal results
+resbsl <- lfcShrink(des, coef="condition_basal_vALI_vs_basal_pALI", type="apeglm")
+x <- rownames(resbsl)
+resbsl$gene <- id2gene$symbol[match(x, id2gene$gene_id)]
+resbsl[is.na(resbsl$gene),]$gene <- rownames(resbsl[is.na(resbsl$gene),])
+```
 
+```{r}
+# check key markers + cftr
+checkGenes <- c("KLF5", "STAT2", "CEBPB", "MED1", "TEAD4", "TEAD1", "IRF1", "IRF9", "SMC1A", "ELF3")
+
+ggplot(resbsl[resbsl$gene %in% checkGenes,], aes(y=log2FoldChange, x=gene)) +
+  geom_bar(position="dodge", stat="identity") +
+  scale_y_continuous(limits=c(-6,6)) +
+  ggtitle('Differences between Basal Samples by Media (vALI vs pALI)')
+```
