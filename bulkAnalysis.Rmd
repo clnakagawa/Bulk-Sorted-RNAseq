@@ -3,14 +3,21 @@ title: "bulkAnalysis"
 output: html_document
 ---
 ```{r setup, include = F}
+library(knitr)
 knitr::opts_chunk$set(message = F, warning = F)
 ```
 
 ```{r}
 library(DESeq2)
+library(RColorBrewer)
+library(vsn)
+library(ggplot2)
+library(pheatmap)
+library(patchwork)
+library(cowplot)
 ```
 
-```{r}
+```{r include=F}
 # load in counts
 cts <- read.table('data/counts.txt', fill=T)
 # get rows where columns are shifted
@@ -38,91 +45,188 @@ cts <- sapply(cts, as.numeric)
 rownames(cts) <- ids
 ```
 
-```{r}
-# helper to get symbols
-getSym <- function(ids) {
-  return(unlist(lapply(ids, function(x) id2gene[id2gene$gene_id==x,]$symbol)))
-}
+```{r include=F}
+# data for pALI
+ctsP <- cts[,c(1:3,7:12)]
+coldataP <- data.frame(condition = c('basal','basal','basal',
+                                    'secretory','secretory','secretory',
+                                    'ciliated','ciliated','ciliated'),
+                      row.names = colnames(ctsP))
+```
 
+```{r include=F}
+# data for vALI
+ctsV <- cts[,c(13:21)]
+coldataV <- data.frame(condition = c('basal','basal','basal',
+                                    'secretory','secretory','secretory',
+                                    'ciliated','ciliated','ciliated'),
+                      row.names = colnames(ctsV))
+```
+
+```{r include=F}
+# make DESeq objects
+ddsP <- DESeqDataSetFromMatrix(countData = ctsP,
+                               colData = coldataP,
+                               design = ~ condition)
+ddsV <- DESeqDataSetFromMatrix(countData = ctsV,
+                               colData = coldataV,
+                               design = ~ condition)
+```
+
+```{r include=F}
+# pre-filtering
+smallestGroupSize <- 3
+keepP <- rowSums(counts(ddsP) >= 10) >= smallestGroupSize
+ddsP <- ddsP[keepP,]
+keepV <- rowSums(counts(ddsV) >= 10) >= smallestGroupSize
+ddsV <- ddsV[keepV,]
 ```
 
 ```{r}
+# check PCA
+vsdP <- vst(ddsP, blind=F)
+plotPCA(vsdP)
+
+vsdV <- vst(ddsV, blind=F)
+plotPCA(vsdV)
+```
+```{r}
+# check sd
+mspP <- meanSdPlot(assay(vsdP), plot = F)
+mspV <- meanSdPlot(assay(vsdV), plot = F)
+
+mspP$gg + scale_y_continuous(limits = c(0, 2.5))
+mspV$gg + scale_y_continuous(limits = c(0, 2.5))
+```
+
+```{r}
+# sample-sample dists
+distP <- dist(t(assay(vsdP)))
+distV <- dist(t(assay(vsdV)))
+
+sdmP <- as.matrix(distP)
+rownames(sdmP) <- vsdP$condition
+colnames(sdmP) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+p1 <- pheatmap(sdmP,
+         clustering_distance_rows=distP,
+         clustering_distance_cols=distP,
+         col=colors)
+
+sdmV <- as.matrix(distV)
+rownames(sdmV) <- vsdV$condition
+colnames(sdmV) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+p2 <- pheatmap(sdmV,
+         clustering_distance_rows=distV,
+         clustering_distance_cols=distV,
+         col=colors)
+```
+
+```{r include=F}
+# run DESeq
+ddsP$condition <- relevel(ddsP$condition, ref = "basal")
+desP <- DESeq(ddsP)
+ddsV$condition <- relevel(ddsV$condition, ref = "basal")
+desV <- DESeq(ddsV)
+```
+
+```{r include=F}
+# results by comparison
+resP.Sec <- lfcShrink(desP, coef="condition_secretory_vs_basal", type="apeglm")
+resP.Cil <- lfcShrink(desP, coef="condition_ciliated_vs_basal", type="apeglm")
+resV.Sec <- lfcShrink(desV, coef="condition_secretory_vs_basal", type="apeglm")
+resV.Cil <- lfcShrink(desV, coef="condition_ciliated_vs_basal", type="apeglm")
+```
+
+```{r include=F}
+# add back gene labels
+resNames <- c("resP.Sec", "resP.Cil", "resV.Sec", "resV.Cil")
+for (name in resNames) {
+  df <- get(name)
+  x <- rownames(df)
+  df$gene <- id2gene$symbol[match(x, id2gene$gene_id)]
+  df[is.na(df$gene),]$gene <- rownames(df[is.na(df$gene),])
+  assign(name, df)
+}
+```
+
+```{r}
+# plot relevant genes
+pltGenes <- c("KLF5", "STAT2", "CEBPB", "MED1", "TEAD4", "TEAD1", "IRF1", "IRF9", "SMC1A", "ELF3")
+
+# pneumaCult
+resP.Sec$Type <- 'secretory'
+resP.Cil$Type <- 'ciliated'
+plotdatP <- rbind(resP.Sec, resP.Cil)
+
+ggplot(plotdatP[plotdatP$gene %in% pltGenes,], aes(fill=Type, y=log2FoldChange, x=gene)) +
+  geom_bar(position="dodge", stat="identity") +
+  scale_y_continuous(limits=c(-3,3))
+
+# vertex ALI
+resV.Sec$Type <- 'secretory'
+resV.Cil$Type <- 'ciliated'
+plotdatV <- rbind(resV.Sec, resV.Cil)
+  
+ggplot(plotdatV[plotdatV$gene %in% pltGenes,], aes(fill=Type, y=log2FoldChange, x=gene)) +
+  geom_bar(position="dodge", stat="identity") +
+  scale_y_continuous(limits=c(-3,3))
+```
+```{r}
+# check key markers + cftr
+checkGenes <- c('CFTR', 'SCGB1A1', 'KRT5', 'FOXJ1')
+
+ggplot(plotdatP[plotdatP$gene %in% checkGenes,], aes(fill=Type, y=log2FoldChange, x=gene)) +
+  geom_bar(position="dodge", stat="identity") +
+  scale_y_continuous(limits=c(-6,6))
+
+ggplot(plotdatV[plotdatV$gene %in% checkGenes,], aes(fill=Type, y=log2FoldChange, x=gene)) +
+  geom_bar(position="dodge", stat="identity") +
+  scale_y_continuous(limits=c(-6,6))
+```
+
+```{r include=F}
+# sanity check on whole dataset
 # make colData object
 coldata <- data.frame(condition = c('basal_pALI','basal_pALI','basal_pALI',
-                                    'bulk_pALI','bulk_pALI','bulk_pALI',
                                     'secretory_pALI','secretory_pALI','secretory_pALI',
                                     'ciliated_pALI','ciliated_pALI','ciliated_pALI',
                                     'basal_vALI','basal_vALI','basal_vALI',
                                     'secretory_vALI','secretory_vALI','secretory_vALI',
                                     'ciliated_vALI','ciliated_vALI','ciliated_vALI'),
-                      row.names = colnames(cts))
+                      row.names = colnames(cts[,c(1:3,7:21)]))
 ```
 
-```{r}
+```{r include=F}
 # make DESeq object
-dds <- DESeqDataSetFromMatrix(countData = cts,
+dds <- DESeqDataSetFromMatrix(countData = cts[,c(1:3,7:21)],
                               colData = coldata,
                               design = ~ condition)
-dds
-```
-
-```{r}
 # pre-filtering
 smallestGroupSize <- 3
 keep <- rowSums(counts(dds) >= 10) >= smallestGroupSize
 dds <- dds[keep,]
+dds
 ```
-
 ```{r}
 # check PCA
 vsd <- vst(dds, blind=F)
 plotPCA(vsd)
-```
-
-```{r}
-# run DESeq
-des <- DESeq(dds)
-
-# get results for pALI comparisons by cell type
-res.Sec.Bsl <- lfcShrink(des, coef="condition_secretory_pALI_vs_basal_pALI", type="apeglm")
-res.Cil.Bsl <- lfcShrink(des, coef="condition_ciliated_pALI_vs_basal_pALI", type="apeglm")
-```
-
-```{r}
-# relevel to get secretory vs ciliated
-dds$condition <- relevel(dds$condition, ref = "ciliated_pALI")
-des <- DESeq(dds)
-
-# get results for secretory vs ciliated
-res.Sec.Cil <- lfcShrink(des, coef="condition_secretory_pALI_vs_ciliated_pALI", type="apeglm")
-```
-
-```{r}
-gene <- id2gene[id2gene$symbol=='KLF5',]$gene_id
-res.Sec.Cil[gene,]
-res.Sec.Bsl[gene,]
-res.Cil.Bsl[gene,]
 
 ```
 ```{r}
-# merge dataframes
-res.Sec.Bsl$Type <- 'secretory'
-res.Cil.Bsl$Type <- 'ciliated'
-allDE <- rbind(res.Sec.Bsl, res.Cil.Bsl)
-x <- rownames(allDE)
-allDE$gene_symbol <- id2gene$symbol[match(x, id2gene$gene_id)]
+# sample-sample dists
+dist <- dist(t(assay(vsd)))
+sdm <- as.matrix(dist)
+rownames(sdm) <- vsd$condition
+colnames(sdm) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sdm,
+         clustering_distance_rows=dist,
+         clustering_distance_cols=dist,
+         col=colors)
+
 ```
 
-```{r}
-library(ggplot2)
 
-plotGenes <- c("KLF5", "STAT2", "CEBPB", "TEAD4", "IRF1", "STAT1", "FOXA1",
-               "IRF9")
-
-plotDE <- allDE[allDE$gene_symbol %in% plotGenes,]
-
-ggplot(plotDE, aes(fill=Type, y=log2FoldChange, x=gene_symbol)) +
-  geom_bar(position="dodge", stat="identity")
-
-print(plotDE)
-```
