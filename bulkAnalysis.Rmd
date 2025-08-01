@@ -15,6 +15,8 @@ library(ggplot2)
 library(pheatmap)
 library(patchwork)
 library(cowplot)
+
+sigCut <- 0.001
 ```
 
 ```{r include=F}
@@ -48,19 +50,18 @@ rownames(cts) <- ids
 ```{r include=F}
 # data for pALI
 ctsP <- cts[,c(1:3,7:12)]
-coldataP <- data.frame(condition = c('basal','basal','basal',
-                                    'secretory','secretory','secretory',
-                                    'ciliated','ciliated','ciliated'),
+coldataP <- data.frame(condition = rep(c("basal", "secretory", "ciliated"), each = 3),
                       row.names = colnames(ctsP))
-```
 
-```{r include=F}
 # data for vALI
 ctsV <- cts[,c(13:21)]
-coldataV <- data.frame(condition = c('basal','basal','basal',
-                                    'secretory','secretory','secretory',
-                                    'ciliated','ciliated','ciliated'),
+coldataV <- data.frame(condition = rep(c("basal", "secretory", "ciliated"), each = 3),
                       row.names = colnames(ctsV))
+
+coldata <- data.frame(condition = rep(c("basal_pALI", "secretory_pALI", "ciliated_pALI",
+                                        "basal_vALI", "secretory_vALI", "ciliated_vALI"), each = 3),
+                      row.names = colnames(cts[,c(1:3,7:21)]))
+
 ```
 
 ```{r include=F}
@@ -82,13 +83,17 @@ keepV <- rowSums(counts(ddsV) >= 10) >= smallestGroupSize
 ddsV <- ddsV[keepV,]
 ```
 
+# Analysis on Samples Separated by Media
+
 ```{r}
 # check PCA
 vsdP <- vst(ddsP, blind=F)
-plotPCA(vsdP) + ggtitle('PCA for pALI samples')
+plotPCA(vsdP) + 
+  theme_bw() + ggtitle('PCA for pALI samples')
 
 vsdV <- vst(ddsV, blind=F)
-plotPCA(vsdV) + ggtitle('PCA for vALI samples')
+plotPCA(vsdV) + 
+  theme_bw() + ggtitle('PCA for vALI samples')
 ```
 ```{r}
 # check sd
@@ -153,7 +158,7 @@ for (name in resNames) {
 }
 ```
 
-```{r}
+```{r include = F}
 # plot relevant genes
 pltGenes <- c("KLF5", "STAT2", "CEBPB", "MED1", "TEAD4", "TEAD1", "IRF1", "IRF9", "SMC1A", "ELF3")
 
@@ -161,36 +166,290 @@ pltGenes <- c("KLF5", "STAT2", "CEBPB", "MED1", "TEAD4", "TEAD1", "IRF1", "IRF9"
 resP.Sec$Type <- 'secretory'
 resP.Cil$Type <- 'ciliated'
 plotdatP <- rbind(resP.Sec, resP.Cil)
-
-ggplot(plotdatP[plotdatP$gene %in% pltGenes,], aes(fill=Type, y=log2FoldChange, x=gene)) +
-  geom_bar(position="dodge", stat="identity") +
-  ggtitle('TFs of Interest DE by Cell Type  in pALI') +
-  scale_y_continuous(limits=c(-3,3))
+plotdatP$sig <- plotdatP$padj < sigCut
 
 # vertex ALI
 resV.Sec$Type <- 'secretory'
 resV.Cil$Type <- 'ciliated'
 plotdatV <- rbind(resV.Sec, resV.Cil)
-  
-ggplot(plotdatV[plotdatV$gene %in% pltGenes,], aes(fill=Type, y=log2FoldChange, x=gene)) +
-  geom_bar(position="dodge", stat="identity") +
-  ggtitle('TFs of Interest DE by Cell Type in vALI') +
-  scale_y_continuous(limits=c(-3,3))
+plotdatV$sig <- plotdatV$padj < sigCut
+
+pltBothVsBsl <- function(df, title, genes, lims) {
+  return(ggplot(df[df$gene %in% genes,], aes(fill = Type, y = log2FoldChange, x = gene)) +
+          geom_bar(position = "dodge", stat = "identity", width = 0.7) +
+          geom_errorbar(aes(
+            ymin = log2FoldChange - lfcSE,
+            ymax = log2FoldChange + lfcSE
+          ), position = position_dodge(width = 0.7), width = 0.2) +
+          ggtitle(title) +
+          geom_text(aes(
+            label = ifelse(sig, "*", ""),
+            y = ifelse(log2FoldChange >= 0, log2FoldChange + lfcSE + 0.2, log2FoldChange - lfcSE - 0.8),
+            group = Type
+          ),
+          position = position_dodge(width = 0.7),
+          vjust = 0.5,
+          size = 20 / .pt) +
+          theme_bw() +
+          theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size=12)) +
+          scale_y_continuous(limits = lims))
+}
 ```
+
+```{r}
+pltBothVsBsl(plotdatP, 'TFs of Interest DE by Cell Type in pALI', pltGenes, c(-6,6))
+pltBothVsBsl(plotdatV, 'TFs of Interest DE by Cell Type in vALI', pltGenes, c(-6,6))
+```
+
 ```{r}
 # check key markers + cftr
 checkGenes <- c('CFTR', 'SCGB1A1', 'KRT5', 'FOXJ1')
 
-ggplot(plotdatP[plotdatP$gene %in% checkGenes,], aes(fill=Type, y=log2FoldChange, x=gene)) +
-  geom_bar(position="dodge", stat="identity") +
-  ggtitle('Marker Genes DE by Cell Type in pALI') +
-  scale_y_continuous(limits=c(-6,6))
-
-ggplot(plotdatV[plotdatV$gene %in% checkGenes,], aes(fill=Type, y=log2FoldChange, x=gene)) +
-  geom_bar(position="dodge", stat="identity") +
-  ggtitle('Marker Genes DE by Cell Type in vALI') +
-  scale_y_continuous(limits=c(-6,6))
+pltBothVsBsl(plotdatP, 'Marker Genes DE by Cell Type in pALI', checkGenes, c(-8,8))
+pltBothVsBsl(plotdatV, 'Marker Genes DE by Cell Type in vALI', checkGenes, c(-8,8))
 ```
+
+# Comparisons between Media Conditions
+
+```{r include = F}
+# get diffexp stats for sec vs cil in pali and vali
+svcP <- DESeqDataSetFromMatrix(countData = ctsP[,4:9],
+                               colData = coldataP[4:9,,drop=F],
+                               design = ~ condition)
+
+svcV <- DESeqDataSetFromMatrix(countData = ctsV[,4:9],
+                               colData = coldataV[4:9,,drop=F],
+                               design = ~ condition)
+smallestGroupSize <- 3
+keepP <- rowSums(counts(svcP) >= 10) >= smallestGroupSize
+svcP <- svcP[keepP,]
+keepV <- rowSums(counts(svcV) >= 10) >= smallestGroupSize
+svcV <- svcV[keepV,]
+
+svcP$condition <- relevel(svcP$condition, ref = "ciliated")
+svcP <- DESeq(svcP)
+svcV$condition <- relevel(svcV$condition, ref = "ciliated")
+svcV <- DESeq(svcV)
+
+svcResP <- lfcShrink(svcP, coef='condition_secretory_vs_ciliated', type='apeglm')
+svcResV <- lfcShrink(svcV, coef='condition_secretory_vs_ciliated', type='apeglm')
+svcResP$Type <- 'pALI'
+svcResV$Type <- 'vALI'
+svcResP$sig <- svcResP$padj < sigCut
+svcResV$sig <- svcResV$padj < sigCut
+
+x <- rownames(svcResP)
+svcResP$gene <- id2gene$symbol[match(x, id2gene$gene_id)]
+svcResP[is.na(svcResP$gene),]$gene <- rownames(svcResP[is.na(svcResP$gene),])
+x <- rownames(svcResV)
+svcResV$gene <- id2gene$symbol[match(x, id2gene$gene_id)]
+svcResV[is.na(svcResV$gene),]$gene <- rownames(svcResV[is.na(svcResV$gene),])
+
+svcResAll <- rbind(svcResP, svcResV)
+```
+
+```{r}
+# plot for key genes + markers
+pltBothVsBsl(svcResAll, "DE of TFs between Secretory and Ciliated", pltGenes, c(-8,8))
+pltBothVsBsl(svcResAll, "DE of Markers between Secretory and Ciliated", checkGenes, c(-8,8))
+```
+## Ciliated vALI vs Ciliated pALI
+
+```{r include = F}
+# get diffexp stats for sec vs cil in pali and vali
+cvc <- DESeqDataSetFromMatrix(countData = cts[,c(10:12,19:21)],
+                               colData = coldata[c(7:9,16:18),,drop=F],
+                               design = ~ condition)
+
+svs <- DESeqDataSetFromMatrix(countData = cts[,c(7:9,16:18)],
+                               colData = coldata[c(4:6,13:15),,drop=F],
+                               design = ~ condition)
+smallestGroupSize <- 3
+keepC <- rowSums(counts(cvc) >= 10) >= smallestGroupSize
+cvc <- cvc[keepC,]
+keepS <- rowSums(counts(svs) >= 10) >= smallestGroupSize
+svs <- svs[keepS,]
+
+cvc$condition <- relevel(cvc$condition, ref = "ciliated_pALI")
+cvc <- DESeq(cvc)
+svs$condition <- relevel(svs$condition, ref = "secretory_pALI")
+svs <- DESeq(svs)
+
+cvcRes <- lfcShrink(cvc, coef='condition_ciliated_vALI_vs_ciliated_pALI', type='apeglm')
+svsRes <- lfcShrink(svs, coef='condition_secretory_vALI_vs_secretory_pALI', type='apeglm')
+
+cvcRes$sig <- cvcRes$padj < sigCut
+svsRes$sig <- svsRes$padj < sigCut
+
+x <- rownames(cvcRes)
+cvcRes$gene <- id2gene$symbol[match(x, id2gene$gene_id)]
+cvcRes[is.na(cvcRes$gene),]$gene <- rownames(cvcRes[is.na(cvcRes$gene),])
+x <- rownames(svsRes)
+svsRes$gene <- id2gene$symbol[match(x, id2gene$gene_id)]
+svsRes[is.na(svsRes$gene),]$gene <- rownames(svsRes[is.na(svsRes$gene),])
+```
+
+```{r}
+ggplot(cvcRes[cvcRes$gene %in% checkGenes,], aes(y=log2FoldChange, x=gene)) +
+  geom_bar(position="dodge", stat="identity") +
+  scale_y_continuous(limits=c(-6,6)) +
+  theme_bw() +
+  geom_text(aes(
+    label = ifelse(sig, "*", ""),
+    y = ifelse(log2FoldChange >= 0, log2FoldChange + 0.2, log2FoldChange - 0.8),
+  ),
+  position = position_dodge(width = 0.7),
+  vjust = 0.5,
+  size = 20 / .pt) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  ggtitle('Differences between Ciliated Samples by Media (vALI vs pALI)')
+
+ggplot(cvcRes[cvcRes$gene %in% pltGenes,], aes(y=log2FoldChange, x=gene)) +
+  geom_bar(position="dodge", stat="identity") +
+  scale_y_continuous(limits=c(-6,6)) +
+  theme_bw() +
+  geom_text(aes(
+    label = ifelse(sig, "*", ""),
+    y = ifelse(log2FoldChange >= 0, log2FoldChange + 0.2, log2FoldChange - 0.8),
+  ),
+  position = position_dodge(width = 0.7),
+  vjust = 0.5,
+  size = 20 / .pt) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  ggtitle('Differences between Ciliated Samples by Media (vALI vs pALI)')
+
+```
+
+## Secretory vALI vs Secretory pALI
+
+```{r}
+ggplot(svsRes[svsRes$gene %in% checkGenes,], aes(y=log2FoldChange, x=gene)) +
+  geom_bar(position="dodge", stat="identity") +
+  scale_y_continuous(limits=c(-6,6)) +
+  theme_bw() +
+  geom_text(aes(
+    label = ifelse(sig, "*", ""),
+    y = ifelse(log2FoldChange >= 0, log2FoldChange + 0.2, log2FoldChange - 0.8),
+  ),
+  position = position_dodge(width = 0.7),
+  vjust = 0.5,
+  size = 20 / .pt) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  ggtitle('Differences between Secretory Samples by Media (vALI vs pALI)')
+
+ggplot(svsRes[svsRes$gene %in% pltGenes,], aes(y=log2FoldChange, x=gene)) +
+  geom_bar(position="dodge", stat="identity") +
+  scale_y_continuous(limits=c(-6,6)) +
+  theme_bw() +
+  geom_text(aes(
+    label = ifelse(sig, "*", ""),
+    y = ifelse(log2FoldChange >= 0, log2FoldChange + 0.2, log2FoldChange - 0.8),
+  ),
+  position = position_dodge(width = 0.7),
+  vjust = 0.5,
+  size = 20 / .pt) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  ggtitle('Differences between Secretory Samples by Media (vALI vs pALI)')
+```
+
+## Checking normalized counts
+
+```{r include = F}
+# look at gene rank on normalized counts
+rlog <- rlog(DESeqDataSetFromMatrix(countData = cts[,c(1:3,7:21)],
+                                                  colData = coldata,
+                                                  design = ~ condition), blind = F)
+
+rlog <- as.data.frame(assay(rlog))
+
+# add avg expr
+types <- c('basal_pALI', 'secretory_pALI', 'ciliated_pALI',
+           'basal_vALI', 'secretory_vALI', 'ciliated_vALI')
+for (i in 1:6) {
+  rlog[types[i]] <- rowMeans(rlog[,(-2+3*i):(3*i)])
+}
+
+# add gene labels
+x <- rownames(rlog)
+rlog$gene <- id2gene$symbol[match(x, id2gene$gene_id)]
+rlog[is.na(rlog$gene),]$gene <- rownames(rlog[is.na(rlog$gene),])
+```
+
+```{r, include = F}
+# plot differences by gene by media used
+# set pcts for cutoff
+pctCut <- 0.20
+
+pltExpr <- function(df, type, title, limsx, limsy) {
+  return(ggplot(df, aes_string(paste(type,'_pALI',sep=''), paste(type,'_vALI',sep=''))) + geom_point() +
+          geom_vline(xintercept = quantile(df[[paste(type,'_pALI',sep='')]], 1-pctCut), color = "red", linetype = "dotted") +
+          geom_hline(yintercept = quantile(df[[paste(type,'_vALI',sep='')]], 1-pctCut), color = "red", linetype = "dotted") +
+          geom_abline(slope=1, intercept=0, color='blue') +
+          scale_x_continuous(limits = limsx) +
+          scale_y_continuous(limits = limsy) +
+          labs(title = title, x = "pALI Expression", y = "vALI Expression"))
+}
+```
+
+```{r}
+pltExpr(rlog, 'basal', 'Basal pALI vs vALI Expression (rlog transform)', c(0,25), c(0,25))
+pltExpr(rlog, 'ciliated', 'Ciliated pALI vs vALI Expression (rlog transform)', c(0,25), c(0,25))
+pltExpr(rlog, 'secretory', 'Secretory pALI vs vALI Expression (rlog transform)', c(0,25), c(0,25))
+```
+```{r}
+# heatmap
+pmapDat <- rlog[rlog$gene %in% checkGenes,]
+p <- pheatmap(pmapDat[,c(19:24)], cluster_rows = F, cluster_cols = F, 
+              labels_row = pmapDat$gene, labels_col = types, display_numbers = T)
+```
+
+```{r}
+# heatmap
+pmapDat <- rlog[rlog$gene %in% pltGenes,]
+p <- pheatmap(pmapDat[,c(19:24)], cluster_rows = F, cluster_cols = F, 
+              labels_row = pmapDat$gene, labels_col = types, display_numbers = T)
+```
+
+```{r, include = F}
+# same for vst
+vsd <- varianceStabilizingTransformation(DESeqDataSetFromMatrix(countData = cts[,c(1:3,7:21)],
+                                                  colData = coldata,
+                                                  design = ~ condition), blind = F)
+
+vsd <- as.data.frame(assay(vsd))
+
+for (i in 1:6) {
+  vsd[[types[i]]] <- rowMeans(vsd[,(-2+3*i):(3*i)])
+}
+
+x <- rownames(vsd)
+vsd$gene <- id2gene$symbol[match(x, id2gene$gene_id)]
+vsd[is.na(vsd$gene),]$gene <- rownames(vsd[is.na(vsd$gene),])
+```
+
+```{r}
+vsd <- na.omit(vsd)
+
+pltExpr(vsd, 'basal', 'Basal pALI vs vALI Expression (vst)', c(5,15), c(5,15))
+pltExpr(vsd, 'ciliated', 'Ciliated pALI vs vALI Expression (vst)', c(5,15), c(5,15))
+pltExpr(vsd, 'secretory', 'Secretory pALI vs vALI Expression (vst)', c(5,15), c(5,15))
+```
+
+```{r}
+# heatmap
+pmapDat <- vsd[vsd$gene %in% checkGenes,]
+p <- pheatmap(pmapDat[,c(19:24)], cluster_rows = F, cluster_cols = F, 
+              labels_row = pmapDat$gene, labels_col = types, display_numbers = T)
+```
+
+```{r}
+# heatmap
+pmapDat <- vsd[vsd$gene %in% pltGenes,]
+p <- pheatmap(pmapDat[,c(19:24)], cluster_rows = F, cluster_cols = F, 
+              labels_row = pmapDat$gene, labels_col = types, display_numbers = T)
+```
+
+# Whole Dataset Analysis
 
 ```{r include=F}
 # sanity check on whole dataset
@@ -219,8 +478,10 @@ dds
 ```{r}
 # check PCA
 vsd <- vst(dds, blind=F)
-plotPCA(vsd) + ggtitle('PCA (all samples)')
+plotPCA(vsd) + 
+  theme_bw() + ggtitle('PCA (all samples)')
 ```
+
 ```{r}
 # sample-sample dists
 dist <- dist(t(assay(vsd)))
@@ -235,6 +496,7 @@ pheatmap(sdm,
          main="Sample-sample Distances")
 
 ```
+
 ```{r include=F}
 dds$condition <- relevel(dds$condition, ref = "basal_pALI")
 des <- DESeq(dds)
@@ -250,10 +512,19 @@ resbsl[is.na(resbsl$gene),]$gene <- rownames(resbsl[is.na(resbsl$gene),])
 
 ```{r}
 # check key markers + cftr
-checkGenes <- c("KLF5", "STAT2", "CEBPB", "MED1", "TEAD4", "TEAD1", "IRF1", "IRF9", "SMC1A", "ELF3")
+pltGenes <- c("KLF5", "STAT2", "CEBPB", "MED1", "TEAD4", "TEAD1", "IRF1", "IRF9", "SMC1A", "ELF3")
+
+ggplot(resbsl[resbsl$gene %in% pltGenes,], aes(y=log2FoldChange, x=gene)) +
+  geom_bar(position="dodge", stat="identity") +
+  scale_y_continuous(limits=c(-6,6)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  ggtitle('Differences between Basal Samples by Media (vALI vs pALI)')
 
 ggplot(resbsl[resbsl$gene %in% checkGenes,], aes(y=log2FoldChange, x=gene)) +
   geom_bar(position="dodge", stat="identity") +
   scale_y_continuous(limits=c(-6,6)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
   ggtitle('Differences between Basal Samples by Media (vALI vs pALI)')
 ```
